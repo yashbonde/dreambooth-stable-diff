@@ -25,6 +25,8 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
+from nbox import Relics
+
 
 logger = get_logger(__name__)
 
@@ -433,7 +435,7 @@ def merge_args(args1: argparse.Namespace, args2: argparse.Namespace) -> argparse
     return args
 
 
-def run_training(args_imported):
+def run_training(args_imported, relic: Relics, files):
     args_default = parse_args()
     args = merge_args(args_default, args_imported)
     print(args)
@@ -683,14 +685,14 @@ def run_training(args_imported):
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
-    logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(train_dataset)}")
-    logger.info(f"  Num batches each epoch = {len(train_dataloader)}")
-    logger.info(f"  Num Epochs = {args.num_train_epochs}")
-    logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
-    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
-    logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
-    logger.info(f"  Total optimization steps = {args.max_train_steps}")
+    print("***** Running training *****")
+    print(f"  Num examples = {len(train_dataset)}")
+    print(f"  Num batches each epoch = {len(train_dataloader)}")
+    print(f"  Num Epochs = {args.num_train_epochs}")
+    print(f"  Instantaneous batch size per device = {args.train_batch_size}")
+    print(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+    print(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
+    print(f"  Total optimization steps = {args.max_train_steps}")
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     global_step = 0
@@ -781,6 +783,10 @@ def run_training(args_imported):
             progress_bar.set_postfix(**logs)
             progress_bar.set_description_str("Progress:" + pr)
             accelerator.log(logs, step=global_step)
+
+            if accelerator.is_main_process and global_step % 100 == 1:
+                print("Checking for:", files[0])
+                relic.has(files[0])
 
             if global_step >= args.max_train_steps:
                 break

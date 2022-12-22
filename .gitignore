@@ -8,3 +8,4 @@ diffusers_model.tar
 env
 data
 *.msg
+.DS_Store

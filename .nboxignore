@@ -4,5 +4,6 @@
 Mix.zip
 Mix/
 __pycache__/
+data/
 env/
 venv/
