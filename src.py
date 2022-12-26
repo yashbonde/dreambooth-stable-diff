@@ -1,4 +1,6 @@
 from nbox import operator
+from nbox.utils import get_files_in_folder
+from nbox.relics.nbx import UserAgentType
 import argparse
 import os
 
@@ -10,7 +12,7 @@ from PIL import Image
 from huggingface_hub import snapshot_download
 
 from time import time
-from nbox import RelicsNBX
+from nbox import RelicsNBX, Lmao
 
 maximum_concepts = 3
 
@@ -174,6 +176,16 @@ def main(
     print("Loading images ...")
     files = load_images(relic)
 
+    # lmao = Lmao(
+    #     project_name = "dreambooth_bala",
+    #     metadata = {
+    #         "resolution": resolution,
+    #         "model": which_model,
+    #         "prompt": prompt,
+    #         "n_files": len(files),
+    #     }
+    # )
+
     file_counter = 0
     for j, file_temp in enumerate(files):
         file = Image.open(file_temp)
@@ -219,11 +231,37 @@ def main(
     )
     print("Starting single training...")
 
-    run_training(args_general, relic, files)
+    run_training(args_general, relic, files, lmao = None)
     print("DONE")
+    # lmao.end()
+
+    # files = get_files_in_folder("./output_model")
+    # for file in files:
+    #     print(file)
+    # files = get_files_in_folder("./instance_images")
+    # for file in files:
+    #     print(file)
 
     print("uploading to relics")
-    relic.put_to("./output_model/model.ckpt", f"output/{time()}_{prompt}.ckpt")
+    # relic.put_to("./output_model/model.ckpt", f"output/{time()}_{prompt}.ckpt")
+
+    # it will automatically switch the user agent
+    # relic.set_user_agent(UserAgentType.CURL)
+    for i, file in enumerate(get_files_in_folder("./output_model")):
+        if "/logs/" in file:
+            continue
+        op_file = file.replace("/job/output_model/", "")
+        op_file = f"output/{op_file}" # for now keep only 1 copy
+        print(file, op_file)
+        relic.put_to(file, op_file)
+
+    for i, file in enumerate(get_files_in_folder("./instance_images")):
+        op_file = file.replace("/job/instance_images/", "")
+        op_file = f"instance_images/{int(time())}_{i}"
+        print(file, op_file)
+        relic.put_to(file, op_file)
+
+    
 
 
 if __name__ == "__main__":

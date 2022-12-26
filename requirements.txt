@@ -1,6 +1,6 @@
+nbox[serving]
 --extra-index-url https://download.pytorch.org/whl/cu113
 torch==1.12.1+cu113
-nbox[serving]==0.11.1
 Pillow
 torchvision==0.13.1+cu113
 git+https://github.com/huggingface/diffusers.git

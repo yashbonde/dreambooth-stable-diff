@@ -26,6 +26,7 @@ from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
 from nbox import Relics
+from nbox import Lmao
 
 
 logger = get_logger(__name__)
@@ -435,7 +436,7 @@ def merge_args(args1: argparse.Namespace, args2: argparse.Namespace) -> argparse
     return args
 
 
-def run_training(args_imported, relic: Relics, files):
+def run_training(args_imported, relic: Relics, files, lmao: Lmao = None):
     args_default = parse_args()
     args = merge_args(args_default, args_imported)
     print(args)
@@ -783,6 +784,8 @@ def run_training(args_imported, relic: Relics, files):
             progress_bar.set_postfix(**logs)
             progress_bar.set_description_str("Progress:" + pr)
             accelerator.log(logs, step=global_step)
+            if lmao:
+                lmao.log(logs, step=global_step)
 
             if accelerator.is_main_process and global_step % 100 == 1:
                 print("Checking for:", files[0])
@@ -793,7 +796,7 @@ def run_training(args_imported, relic: Relics, files):
 
             if args.train_text_encoder and global_step == args.stop_text_encoder_training and global_step >= 30:
                 if accelerator.is_main_process:
-                    print(" [0;32m" + " Freezing the text_encoder ..." + " [0m")
+                    print(" \033[32m" + " Freezing the text_encoder ..." + " \033[0m")
                     frz_dir = args.output_dir + "/text_encoder_frozen"
                     if os.path.exists(frz_dir):
                         subprocess.call("rm -r " + frz_dir, shell=True)
@@ -815,7 +818,7 @@ def run_training(args_imported, relic: Relics, files):
                         os.mkdir(save_dir)
                     inst = save_dir[16:]
                     inst = inst.replace(" ", "_")
-                    print(" [1;32mSAVING CHECKPOINT: " + args.Session_dir + "/" + inst + ".ckpt")
+                    print(" \033[1;32mSAVING CHECKPOINT: " + args.Session_dir + "/" + inst + ".ckpt")
                     # Create the pipeline using the trained modules and save it.
                     if accelerator.is_main_process:
                         pipeline = StableDiffusionPipeline.from_pretrained(
