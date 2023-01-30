@@ -45,6 +45,10 @@ def get_model():
 
   return pipeline
 
+# just call this to load the model and cache objects, it's okay to put this code here
+# since we are not going to call until this is on the pod
+pipeline = get_model()
+
 @operator()
 def prompt(
   p: str,
@@ -54,7 +58,6 @@ def prompt(
   guidance_scale: float = 7.5,
   negative_prompt: str = None
 ):
-  pipeline = get_model()
   with torch.no_grad():
     out = pipeline(p, h, w, num_inference_steps, guidance_scale, negative_prompt)
   return {
@@ -69,7 +72,3 @@ def prompt(
       "negative_prompt": negative_prompt
     }
   }
-
-# just call this to load the model and cache objects, it's okay to put this code here
-# since we are not going to call until this is on the pod
-prompt("hello world")
