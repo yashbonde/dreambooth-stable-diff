@@ -1,6 +1,5 @@
 from nbox import operator
 from nbox.utils import get_files_in_folder
-from nbox.relics.nbx import UserAgentType
 import argparse
 import os
 
@@ -12,7 +11,7 @@ from PIL import Image
 from huggingface_hub import snapshot_download
 
 from time import time
-from nbox import RelicsNBX, Lmao
+from nbox import Relics, Lmao
 
 maximum_concepts = 3
 
@@ -44,7 +43,7 @@ def get_files(dir):
     return files
 
 
-def load_images(relic: RelicsNBX):
+def load_images(relic: Relics):
     files = relic.get_from("manifest.txt", "manifest.txt")
     with open("manifest.txt", "r") as f:
         files = f.readlines()
@@ -170,7 +169,7 @@ def main(
 
     torch.cuda.empty_cache()
     print("Connecting to Relics ...")
-    relic = RelicsNBX("dreambooth")
+    relic = Relics("dreambooth")
 
     # first step is to get all the data and process the images
     print("Loading images ...")
