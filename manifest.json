@@ -1,0 +1,52 @@
+{
+    "images": [
+        {
+            "path": "data/aliens.PNG",
+            "prompt": "three big colorful aliens with big eyes floating in black space time with eye shaped planets in the background, style: @wrinkledot"
+        },
+        {
+            "path": "data/eye_boquet.PNG",
+            "prompt": "three yellow eyes coming out a geometric cats head like a flowers in vase, style: @wrinkledot"
+        },
+        {
+            "path": "data/eye_geometric.PNG",
+            "prompt": "geometric patterns coming out of an eye with pearls around it, style: @wrinkledot"
+        },
+        {
+            "path": "data/eye_glasses.PNG",
+            "prompt": "A set of drowsy red eyes behind specs with yellow glasses and green framae, style: @wrinkledot"
+        },
+        {
+            "path": "data/heart_in_hand.JPG",
+            "prompt": "Beautiful purple hand holding a red heart with planets in background with black universe and stars in the background, style: @wrinkledot"
+        },
+        {
+            "path": "data/i_woke_up_like_this.png",
+            "prompt": "A man with body of a fly lying on a bed with green covers, style: @wrinkledot"
+        },
+        {
+            "path": "data/invisible_man.PNG",
+            "prompt": "The invisible man, can only see his eyes, nose and lips wearing a hat and suit with birds behind him, style: @wrinkledot"
+        },
+        {
+            "path": "data/love_poster.PNG",
+            "prompt": "A poster for 'love is all you need' with people dancing between the letters, style: @wrinkledot"
+        },
+        {
+            "path": "data/pink_lady.PNG",
+            "prompt": "Lady wearing pink top and a necklace with a drowsy eye, there is colorful smoke behind her, style: @wrinkledot"
+        },
+        {
+            "path": "data/the_beatles.png",
+            "prompt": "poster for 'The Beatles' but it is sketch of insect beatles, style: @wrinkledot"
+        },
+        {
+            "path": "data/van_gogh.PNG",
+            "prompt": "A colorful sketch of Van Gogh with green flowers coming out of his back, style: @wrinkledot"
+        },
+        {
+            "path": "data/yellow-sub.png",
+            "prompt": "a pretty yellow submarine floating in space with whales and fishes, style: @wrinkledot"
+        }
+    ]
+}

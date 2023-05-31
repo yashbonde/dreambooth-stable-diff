@@ -58,7 +58,7 @@ def load_images(relic: Relics):
 
 @operator()
 def main(
-    p: str = "art in the style of Bala, @wrinkledot, from Chennai",
+    manifest: str = "./manifest.json",
     # pretrained_model_name_or_path: str = None,
     # tokenizer_name: str = None,
     # instance_data_dir: str = None,
@@ -103,7 +103,7 @@ def main(
     # cache_latents: bool = False,
     # Session_dir: str = "",
     # local_rank: int = -1,
-    ):
+):
     """train your dreambooth model with NimbleBox Jobs. It pulls the data from a folder in the Relics and trains the model.
 
     Args:
@@ -157,10 +157,6 @@ def main(
     if env_local_rank != -1 and env_local_rank != local_rank:
         local_rank = env_local_rank
 
-    prompt = p
-    if not prompt:
-        raise ValueError("Define your concept with --p")
-    
     # define things that are user everywhere
     which_model = "v1-5"
     resolution = 512  # if which_model != "v2-1-768" else 768
@@ -230,7 +226,8 @@ def main(
     )
     print("Starting single training...")
 
-    run_training(args_general, relic, files, lmao = None)
+    manifest
+    run_training(args_imported = args_general, manifest_path = manifest, lmao = None)
     print("DONE")
     # lmao.end()
 

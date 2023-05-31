@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import math
+import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -24,9 +25,6 @@ from PIL import Image
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
-
-from nbox import Relics
-from nbox import Lmao
 
 
 logger = get_logger(__name__)
@@ -274,8 +272,7 @@ class DreamBoothDataset(Dataset):
 
     def __init__(
         self,
-        instance_data_root,
-        instance_prompt,
+        manifest: str,
         tokenizer,
         args,
         class_data_root=None,
@@ -288,13 +285,16 @@ class DreamBoothDataset(Dataset):
         self.tokenizer = tokenizer
         self.image_captions_filename = None
 
-        self.instance_data_root = Path(instance_data_root)
-        if not self.instance_data_root.exists():
-            raise ValueError("Instance images root doesn't exists.")
+        with open(manifest, "r") as f:
+            prompts_data = json.load(f).get("images", [])
 
-        self.instance_images_path = list(Path(instance_data_root).iterdir())
-        self.num_instance_images = len(self.instance_images_path)
-        self.instance_prompt = instance_prompt
+        for item in prompts_data:
+            path = item["path"]
+            if not os.path.exists(path):
+                raise ValueError(f"Path: '{path}' doesn't exist.")
+    
+        self.prompts_data = prompts_data
+        self.num_instance_images = len(prompts_data)
         self._length = self.num_instance_images
 
         if args.image_captions_filename:
@@ -325,23 +325,12 @@ class DreamBoothDataset(Dataset):
 
     def __getitem__(self, index):
         example = {}
-        path = self.instance_images_path[index % self.num_instance_images]
+        data = self.prompts_data[index % self.num_instance_images]
+        path = data["path"]
+        instance_prompt = data["prompt"]
         instance_image = Image.open(path)
         if not instance_image.mode == "RGB":
             instance_image = instance_image.convert("RGB")
-
-        instance_prompt = self.instance_prompt
-
-        if self.image_captions_filename:
-            filename = Path(path).stem
-            pt = "".join([i for i in filename if not i.isdigit()])
-            pt = pt.replace("_", " ")
-            pt = pt.replace("(", "")
-            pt = pt.replace(")", "")
-            pt = pt.replace("-", "")
-            instance_prompt = pt
-            sys.stdout.write(" [0;32m" + instance_prompt + " [0m")
-            sys.stdout.flush()
 
         example["instance_images"] = self.image_transforms(instance_image)
         example["instance_prompt_ids"] = self.tokenizer(
@@ -436,7 +425,7 @@ def merge_args(args1: argparse.Namespace, args2: argparse.Namespace) -> argparse
     return args
 
 
-def run_training(args_imported, relic: Relics, files, lmao: Lmao = None):
+def run_training(args_imported, manifest_path: str, lmao: Lmao = None):
     args_default = parse_args()
     args = merge_args(args_default, args_imported)
     print(args)
@@ -571,14 +560,13 @@ def run_training(args_imported, relic: Relics, files, lmao: Lmao = None):
     noise_scheduler = DDPMScheduler.from_config(args.pretrained_model_name_or_path, subfolder="scheduler")
 
     train_dataset = DreamBoothDataset(
-        instance_data_root=args.instance_data_dir,
-        instance_prompt=args.instance_prompt,
+        manifest = manifest_path,
+        tokenizer=tokenizer,
+        args=args,
         class_data_root=args.class_data_dir if args.with_prior_preservation else None,
         class_prompt=args.class_prompt,
-        tokenizer=tokenizer,
         size=args.resolution,
         center_crop=args.center_crop,
-        args=args,
     )
 
     def collate_fn(examples):
@@ -605,6 +593,10 @@ def run_training(args_imported, relic: Relics, files, lmao: Lmao = None):
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn
     )
+
+    for step, batch in enumerate(train_dataloader):
+        print(step, batch.keys())
+    exit()
 
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False

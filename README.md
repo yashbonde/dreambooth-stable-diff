@@ -3,9 +3,21 @@
 In this example we are going to train our own custom model for stable diffusion image generator, monitor it's performance, and serve it as a REST API.
 
 
-### Step 1: Create a folder with images
+Things
 
-First we need to gather some data for this, so create a folder `mkdir data` and put some images in it.
+```
+alias STD_NBX="nbx projects -id 'a394e541'"
+```
+
+
+### Step 1: 🌤️ Upload Images
+
+First we need to gather some data for this, so create a folder `mkdir data` and put some images in it. Modify the [manifest.jsonl](./manifest.json) file and load with all the images you want to train on with captions. To upload:
+
+```
+STD_NBX - artifact put_to manifest.json manifest.json
+STD_NBX - artifact put_to ./data ./
+```
 
 ### Step 2: Train the model
 
