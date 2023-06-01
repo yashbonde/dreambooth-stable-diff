@@ -26,6 +26,8 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
+from nbox import Project
+
 
 logger = get_logger(__name__)
 
@@ -425,7 +427,7 @@ def merge_args(args1: argparse.Namespace, args2: argparse.Namespace) -> argparse
     return args
 
 
-def run_training(args_imported, manifest_path: str, lmao: Lmao = None):
+def run_training(args_imported, manifest_path: str, project: Project = None):
     args_default = parse_args()
     args = merge_args(args_default, args_imported)
     print(args)
@@ -594,10 +596,6 @@ def run_training(args_imported, manifest_path: str, lmao: Lmao = None):
         train_dataset, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn
     )
 
-    for step, batch in enumerate(train_dataloader):
-        print(step, batch.keys())
-    exit()
-
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -690,6 +688,15 @@ def run_training(args_imported, manifest_path: str, lmao: Lmao = None):
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     global_step = 0
 
+    tracker = None
+    if project is not None:
+        # https://stackoverflow.com/questions/16878315/what-is-the-right-way-to-treat-python-argparse-namespace-as-a-dictionary
+        args_dict = vars(args)
+        args_dict["number_of_samples"] = len(train_dataset)
+        args_dict["number_batches_each_epoch"] = len(train_dataloader)
+        args_dict["total_train_batch_size"] = total_batch_size
+        tracker = project.get_exp_tracker(metadata = args_dict)
+
     for epoch in range(args.num_train_epochs):
         unet.train()
         if args.train_text_encoder:
@@ -776,12 +783,9 @@ def run_training(args_imported, manifest_path: str, lmao: Lmao = None):
             progress_bar.set_postfix(**logs)
             progress_bar.set_description_str("Progress:" + pr)
             accelerator.log(logs, step=global_step)
-            if lmao:
-                lmao.log(logs, step=global_step)
-
-            if accelerator.is_main_process and global_step % 100 == 1:
-                print("Checking for:", files[0])
-                relic.has(files[0])
+            if tracker is not None:
+                logs["step"] = global_step
+                tracker.log(logs)
 
             if global_step >= args.max_train_steps:
                 break
@@ -879,6 +883,8 @@ def run_training(args_imported, manifest_path: str, lmao: Lmao = None):
     del pipeline
     torch.cuda.empty_cache()
     gc.collect()
+
+    tracker.end() # end the logging for the tracker
 
 
 if __name__ == "__main__":

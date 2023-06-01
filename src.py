@@ -1,3 +1,7 @@
+import json
+from tqdm import trange
+from typing import Dict, List, Any
+
 from nbox import operator
 from nbox.utils import get_files_in_folder
 import argparse
@@ -11,7 +15,7 @@ from PIL import Image
 from huggingface_hub import snapshot_download
 
 from time import time
-from nbox import Relics, Lmao
+from nbox import Project
 
 maximum_concepts = 3
 
@@ -43,17 +47,14 @@ def get_files(dir):
     return files
 
 
-def load_images(relic: Relics):
-    files = relic.get_from("manifest.txt", "manifest.txt")
-    with open("manifest.txt", "r") as f:
-        files = f.readlines()
-    files = [file.strip() for file in files]
-    print("`files`:", files)
-    os.makedirs("data", exist_ok=True)
-    for f in files:
-        print(f)
-        relic.get_from(f, f)
-    return files
+def load_images(manifest: str, artifact) -> Dict[str, str]:
+    with open(manifest, "r") as f:
+        data = json.load(f)
+    files = [x["path"] for x in data["images"]]
+    for _, f in zip(trange(len(files)), files):
+        if not os.path.exists(f):
+            artifact.get_from(f, f)
+    return {x["path"]:x["prompt"] for x in data["images"]}
 
 
 @operator()
@@ -75,8 +76,6 @@ def main(
     # train_text_encoder: bool = False,
     # train_batch_size: int = 4,
     # sample_batch_size: int = 4,
-    # num_train_epochs: int = 1,
-    # max_train_steps: int = None,
     # gradient_accumulation_steps: int = 1,
     # gradient_checkpointing: bool = False,
     # learning_rate: float = 5e-06,
@@ -104,7 +103,7 @@ def main(
     # Session_dir: str = "",
     # local_rank: int = -1,
 ):
-    """train your dreambooth model with NimbleBox Jobs. It pulls the data from a folder in the Relics and trains the model.
+    """train your dreambooth model with NimbleBox Jobs. It pulls the data from a folder in the artifacts and trains the model.
 
     Args:
         p (str, optional): The prompt to fine tune to.
@@ -124,8 +123,6 @@ def main(
         # train_text_encoder(bool): Whether to train the text encoder
         # train_batch_size(int): Batch size (per device) for the training dataloader.
         # sample_batch_size(int): Batch size (per device) for sampling images.
-        # num_train_epochs(int): Number of training epochs
-        # max_train_steps(int): Total number of training steps to perform.  If provided, overrides num_train_epochs.
         # gradient_accumulation_steps(int): Number of updates steps to accumulate before performing a backward/update pass.
         # gradient_checkpointing(bool): Whether or not to use gradient checkpointing to save memory at the expense of slower backward pass.
         # learning_rate(float): Initial learning rate (after the potential warmup period) to use.
@@ -162,28 +159,21 @@ def main(
     resolution = 512  # if which_model != "v2-1-768" else 768
     os.makedirs("instance_images", exist_ok=True)
     os.makedirs("output_model", exist_ok=True)
-
     torch.cuda.empty_cache()
-    print("Connecting to Relics ...")
-    relic = Relics("dreambooth")
+
+    project = Project("a394e541")
+    artifact = project.get_artifact()
+    if not os.path.exists(manifest):
+        print("Did not find manifest, downloading manifest")
+        artifact.get_from(manifest, manifest)
 
     # first step is to get all the data and process the images
     print("Loading images ...")
-    files = load_images(relic)
-
-    # lmao = Lmao(
-    #     project_name = "dreambooth_bala",
-    #     metadata = {
-    #         "resolution": resolution,
-    #         "model": which_model,
-    #         "prompt": prompt,
-    #         "n_files": len(files),
-    #     }
-    # )
+    image_prompts_map = load_images(manifest, artifact)
 
     file_counter = 0
-    for j, file_temp in enumerate(files):
-        file = Image.open(file_temp)
+    for j, (path, prompt) in enumerate(image_prompts_map.items()):
+        file = Image.open(path)
         image = pad_image(file)
         image = image.resize((resolution, resolution))
         image = image.convert("RGB")
@@ -191,9 +181,9 @@ def main(
         file_counter += 1
     
     # training variables
-    Train_text_encoder_for = 15  # 30 for object, 70 for person, 15 for style
-    Training_Steps = file_counter * 150
-    stptxt = int((Training_Steps * Train_text_encoder_for) / 100)
+    train_text_encoder_for = 15  # 30 for object, 70 for person, 15 for style
+    training_Steps = file_counter * 150
+    stptxt = int((training_Steps * train_text_encoder_for) / 100)
 
     # now download the model
     model_v1_5 = snapshot_download(repo_id="multimodalart/sd-fine-tunable")
@@ -220,42 +210,33 @@ def main(
         learning_rate=2e-6,
         lr_scheduler="polynomial",
         lr_warmup_steps=0,
-        max_train_steps=Training_Steps,
+        max_train_steps=training_Steps,
         gradient_checkpointing=gradient_checkpointing,
         cache_latents=cache_latents,
     )
     print("Starting single training...")
 
-    manifest
-    run_training(args_imported = args_general, manifest_path = manifest, lmao = None)
+    run_training(args_imported = args_general, manifest_path = manifest, project = project)
     print("DONE")
-    # lmao.end()
-
-    # files = get_files_in_folder("./output_model")
-    # for file in files:
-    #     print(file)
-    # files = get_files_in_folder("./instance_images")
-    # for file in files:
-    #     print(file)
-
-    print("uploading to relics")
-    # relic.put_to("./output_model/model.ckpt", f"output/{time()}_{prompt}.ckpt")
+ 
+    print("uploading to artifacts ...")
+    artifact.put_to("./output_model/model.ckpt", f"output/{time()}_model.ckpt")
 
     # it will automatically switch the user agent
-    # relic.set_user_agent(UserAgentType.CURL)
+    # artifact.set_user_agent(UserAgentType.CURL)
     for i, file in enumerate(get_files_in_folder("./output_model")):
         if "/logs/" in file:
             continue
         op_file = file.replace("/job/output_model/", "")
         op_file = f"output/{op_file}" # for now keep only 1 copy
         print(file, op_file)
-        relic.put_to(file, op_file)
+        artifact.put_to(file, op_file)
 
     for i, file in enumerate(get_files_in_folder("./instance_images")):
         op_file = file.replace("/job/instance_images/", "")
         op_file = f"instance_images/{int(time())}_{i}"
         print(file, op_file)
-        relic.put_to(file, op_file)
+        artifact.put_to(file, op_file)
 
     
 

@@ -45,7 +45,7 @@
             "prompt": "A colorful sketch of Van Gogh with green flowers coming out of his back, style: @wrinkledot"
         },
         {
-            "path": "data/yellow-sub.png",
+            "path": "data/yellow_sub.png",
             "prompt": "a pretty yellow submarine floating in space with whales and fishes, style: @wrinkledot"
         }
     ]
