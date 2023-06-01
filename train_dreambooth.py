@@ -1,32 +1,34 @@
-import argparse
-import itertools
+import os
+import gc
+import sys
 import math
 import json
-import os
-from pathlib import Path
-from typing import Optional
-import subprocess
-import sys
-import gc
 import random
+import argparse
+import itertools
+import subprocess
+from PIL import Image
+from pathlib import Path
+from pprint import pformat
+from tqdm.auto import tqdm
+from typing import Optional
 
 import torch
-import torch.nn.functional as F
 import torch.utils.checkpoint
+import torch.nn.functional as F
 from torch.utils.data import Dataset
+from torchvision import transforms
 
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
 from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.optimization import get_scheduler
-from huggingface_hub import HfFolder, Repository, whoami
-from PIL import Image
-from torchvision import transforms
-from tqdm.auto import tqdm
+from huggingface_hub import HfFolder, Repository, whoami, snapshot_download
 from transformers import CLIPTextModel, CLIPTokenizer
 
-from nbox import Project
+from common import load_images
+from nbox import Project # nbox is out SDK / CLI / APIs / python package for NBX
 
 
 logger = get_logger(__name__)
@@ -35,10 +37,16 @@ logger = get_logger(__name__)
 def parse_args():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
     parser.add_argument(
+        "--manifest",
+        type=str,
+        required=True,
+        help="Path to training manifest file",
+    )
+    parser.add_argument(
         "--pretrained_model_name_or_path",
         type=str,
         default=None,
-        # required=True,
+        required=False,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
@@ -51,14 +59,14 @@ def parse_args():
         "--instance_data_dir",
         type=str,
         default=None,
-        # required=True,
+        required=False,
         help="A folder containing the training data of instance images.",
     )
     parser.add_argument(
         "--class_data_dir",
         type=str,
         default=None,
-        # required=False,
+        required=False,
         help="A folder containing the training data of class images.",
     )
     parser.add_argument(
@@ -427,10 +435,7 @@ def merge_args(args1: argparse.Namespace, args2: argparse.Namespace) -> argparse
     return args
 
 
-def run_training(args_imported, manifest_path: str, project: Project = None):
-    args_default = parse_args()
-    args = merge_args(args_default, args_imported)
-    print(args)
+def run_training(args, manifest_path: str, project: Project = None):
     logging_dir = Path(args.output_dir, args.logging_dir)
     i = args.save_starting_step
     accelerator = Accelerator(
@@ -839,6 +844,12 @@ def run_training(args_imported, manifest_path: str, project: Project = None):
                         subprocess.call("rm -r " + save_dir, shell=True)
                         i = i + args.save_n_steps
 
+                    # TODO: @yashbonde complete this part of the code
+                    if tracker is not None:
+                        if "/logs/" in file:
+                            continue
+                        tracker.save_file(save_dir)
+
         accelerator.wait_for_everyone()
 
     # Create the pipeline using using the trained modules and save it.
@@ -887,6 +898,112 @@ def run_training(args_imported, manifest_path: str, project: Project = None):
     tracker.end() # end the logging for the tracker
 
 
+def pad_image(image):
+    w, h = image.size
+    if w == h:
+        return image
+    elif w > h:
+        new_image = Image.new(image.mode, (w, w), (0, 0, 0))
+        new_image.paste(image, (0, (w - h) // 2))
+        return new_image
+    else:
+        new_image = Image.new(image.mode, (h, h), (0, 0, 0))
+        new_image.paste(image, ((h - w) // 2, 0))
+        return new_image
+
+
+def main():
+    env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    if env_local_rank != -1 and env_local_rank != local_rank:
+        local_rank = env_local_rank
+    args_default = parse_args()
+
+    # define things that are user everywhere
+    which_model = "v1-5"
+    resolution = 512  # if which_model != "v2-1-768" else 768
+    os.makedirs("instance_images", exist_ok=True)
+    os.makedirs("output_model", exist_ok=True)
+    torch.cuda.empty_cache()
+
+    project = Project("a394e541")
+    artifact = project.get_artifact()
+    manifest_fp = args_default.manifest
+    if not os.path.exists(manifest_fp):
+        print("Did not find manifest, downloading manifest")
+        artifact.get_from(manifest_fp, manifest_fp)
+
+    # first step is to get all the data and process the images
+    print("Loading images ...")
+    image_prompts_map = load_images(manifest_fp, artifact)
+
+    file_counter = 0
+    for j, (path, prompt) in enumerate(image_prompts_map.items()):
+        file = Image.open(path)
+        image = pad_image(file)
+        image = image.resize((resolution, resolution))
+        image = image.convert("RGB")
+        image.save(f"instance_images/{prompt}_({j+1}).jpg", format="JPEG", quality=100)
+        file_counter += 1
+
+    # training variables
+    train_text_encoder_for = 15  # 30 for object, 70 for person, 15 for style
+    training_Steps = file_counter * 150
+    stptxt = int((training_Steps * train_text_encoder_for) / 100)
+
+    # now download the model
+    model_v1_5 = snapshot_download(repo_id="multimodalart/sd-fine-tunable")
+    model_to_load = model_v1_5
+    gradient_checkpointing = True if (which_model != "v1-5") else False
+    cache_latents = True if which_model != "v1-5" else False
+
+    # load the default arguments
+    args_imported = argparse.Namespace(
+        image_captions_filename=True,
+        train_text_encoder=True if stptxt > 0 else False,
+        stop_text_encoder_training=stptxt,
+        save_n_steps=0,
+        pretrained_model_name_or_path=model_to_load,
+        instance_data_dir="instance_images",
+        class_data_dir=None,
+        output_dir="output_model",
+        instance_prompt="",
+        seed=42,
+        resolution=resolution,
+        mixed_precision="fp16",
+        train_batch_size=1,
+        gradient_accumulation_steps=1,
+        use_8bit_adam=True,
+        learning_rate=2e-6,
+        lr_scheduler="polynomial",
+        lr_warmup_steps=0,
+        max_train_steps=training_Steps,
+        gradient_checkpointing=gradient_checkpointing,
+        cache_latents=cache_latents,
+    )
+    print("Starting single training...")
+
+    args = merge_args(args_default, args_imported)
+    print(pformat(vars(args)))
+
+    # run the training loop and create checkpoint files
+    run_training(args = args, manifest_path = manifest_fp, project = project)
+
+    # it will automatically switch the user agent
+    for i, file in enumerate(get_files_in_folder("./output_model")):
+        if "/logs/" in file:
+            continue
+        op_file = file.replace("/job/output_model/", "")
+        op_file = f"output/{op_file}" # for now keep only 1 copy
+        print(file, op_file)
+        artifact.put_to(file, op_file)
+
+    for i, file in enumerate(get_files_in_folder("./instance_images")):
+        op_file = file.replace("/job/instance_images/", "")
+        op_file = f"instance_images/{int(time())}_{i}"
+        print(file, op_file)
+        artifact.put_to(file, op_file)
+
+
+
 if __name__ == "__main__":
-    pass
-    # main()
+    main()
