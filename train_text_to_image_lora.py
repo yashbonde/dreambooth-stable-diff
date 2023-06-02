@@ -17,23 +17,25 @@
 
 # taken from https://github.com/huggingface/diffusers/tree/main/examples/text_to_image
 
-import argparse
-import logging
-import math
 import os
+import math
 import random
+import logging
+import argparse
+import numpy as np
 from pathlib import Path
 
-import datasets
-import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
+
+# import datasets
+# from datasets import load_dataset
 import transformers
+
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from datasets import load_dataset
 from huggingface_hub import create_repo, upload_folder
 from packaging import version
 from torchvision import transforms
@@ -47,6 +49,9 @@ from diffusers.models.attention_processor import LoRAAttnProcessor
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
+
+from common import load_images, manifest_to_hf_dataset
+from nbox import Project
 
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
@@ -88,15 +93,14 @@ def parse_args():
     parser.add_argument(
         "--manifest",
         type=str,
-        default=None,
         required=True,
-        help="Path to the manifest file",
+        help="Path to training manifest file",
     )
     parser.add_argument(
         "--pretrained_model_name_or_path",
         type=str,
-        default=None,
-        required=True,
+        default="runwayml/stable-diffusion-v1-5",
+        required=False,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
@@ -107,30 +111,10 @@ def parse_args():
         help="Revision of pretrained model identifier from huggingface.co/models.",
     )
     parser.add_argument(
-        "--dataset_name",
-        type=str,
-        default=None,
-        help=(
-            "The name of the Dataset (from the HuggingFace hub) to train on (could be your own, possibly private,"
-            " dataset). It can also be a path pointing to a local copy of a dataset in your filesystem,"
-            " or to a folder containing files that 🤗 Datasets can understand."
-        ),
-    )
-    parser.add_argument(
         "--dataset_config_name",
         type=str,
         default=None,
         help="The config of the Dataset, leave as None if there's only one config.",
-    )
-    parser.add_argument(
-        "--train_data_dir",
-        type=str,
-        default=None,
-        help=(
-            "A folder containing the training data. Folder contents must follow the structure described in"
-            " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.jsonl` file"
-            " must exist to provide the captions for the images. Ignored if `dataset_name` is specified."
-        ),
     )
     parser.add_argument(
         "--image_column", type=str, default="image", help="The column of the dataset containing an image."
@@ -138,7 +122,7 @@ def parse_args():
     parser.add_argument(
         "--caption_column",
         type=str,
-        default="text",
+        default="prompt",
         help="The column of the dataset containing a caption or a list of captions.",
     )
     parser.add_argument(
@@ -151,11 +135,11 @@ def parse_args():
         help="Number of images that should be generated during validation with `validation_prompt`.",
     )
     parser.add_argument(
-        "--validation_epochs",
+        "--validation_steps",
         type=int,
-        default=1,
+        default=50,
         help=(
-            "Run fine-tuning validation every X epochs. The validation process consists of running the prompt"
+            "Run fine-tuning validation every X steps. The validation process consists of running the prompt"
             " `args.validation_prompt` multiple times: `args.num_validation_images`."
         ),
     )
@@ -347,28 +331,26 @@ def parse_args():
     if env_local_rank != -1 and env_local_rank != args.local_rank:
         args.local_rank = env_local_rank
 
-    # Sanity checks
-    if args.dataset_name is None and args.train_data_dir is None:
-        raise ValueError("Need either a dataset name or a training folder.")
-
     return args
-
-
-DATASET_NAME_MAPPING = {
-    "lambdalabs/pokemon-blip-captions": ("image", "text"),
-}
 
 
 def main():
     args = parse_args()
-    logging_dir = os.path.join(args.output_dir, args.logging_dir)
 
+    project = Project("a394e541")
+    artifact = project.get_artifact()
+    manifest_fp = args.manifest
+    if not os.path.exists(manifest_fp):
+        print("Did not find manifest, downloading manifest")
+        artifact.get_from(manifest_fp, manifest_fp)
+
+    logging_dir = os.path.join(args.output_dir, args.logging_dir)
     accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
 
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
-        log_with=args.report_to,
+        log_with="wandb",
         logging_dir=logging_dir,
         project_config=accelerator_project_config,
     )
@@ -381,11 +363,9 @@ def main():
     )
     logger.info(accelerator.state, main_process_only=False)
     if accelerator.is_local_main_process:
-        datasets.utils.logging.set_verbosity_warning()
         transformers.utils.logging.set_verbosity_warning()
         diffusers.utils.logging.set_verbosity_info()
     else:
-        datasets.utils.logging.set_verbosity_error()
         transformers.utils.logging.set_verbosity_error()
         diffusers.utils.logging.set_verbosity_error()
 
@@ -533,58 +513,59 @@ def main():
         eps=args.adam_epsilon,
     )
 
+    # NOTE: The only advantage of using the hf-datasets is that we can apply transformations on it
+    # so we will need to build our thing that returns the DatasetDict thingy. however in the example code
+    # that uses the pokemon captions (https://huggingface.co/datasets/lambdalabs/pokemon-blip-captions)
+    # dataset, it will also load all the images in the memory, lol!
+    # TODO: @yashbonde this is the point that can be improved, by providing a similar streaming layer in the
+    # middle
+
     # Get the datasets: you can either provide your own training and evaluation files (see below)
     # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
+    # # In distributed training, the load_dataset function guarantees that only one local process can concurrently
+    # # download the dataset.
+    # if args.dataset_name is not None:
+    #     # Downloading and loading a dataset from the hub.
+    #     dataset = load_dataset(
+    #         args.dataset_name,
+    #         args.dataset_config_name,
+    #         cache_dir=args.cache_dir,
+    #     )
+    # else:
+    #     data_files = {}
+    #     if args.train_data_dir is not None:
+    #         data_files["train"] = os.path.join(args.train_data_dir, "**")
+    #     dataset = load_dataset(
+    #         "imagefolder",
+    #         data_files=data_files,
+    #         cache_dir=args.cache_dir,
+    #     )
+    #     # See more about loading custom images at
+    #     # https://huggingface.co/docs/datasets/v2.4.0/en/image_load#imagefolder
 
-    # In distributed training, the load_dataset function guarantees that only one local process can concurrently
-    # download the dataset.
-    if args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        dataset = load_dataset(
-            args.dataset_name,
-            args.dataset_config_name,
-            cache_dir=args.cache_dir,
-        )
-    else:
-        data_files = {}
-        if args.train_data_dir is not None:
-            data_files["train"] = os.path.join(args.train_data_dir, "**")
-        dataset = load_dataset(
-            "imagefolder",
-            data_files=data_files,
-            cache_dir=args.cache_dir,
-        )
-        # See more about loading custom images at
-        # https://huggingface.co/docs/datasets/v2.4.0/en/image_load#imagefolder
-
-    # Preprocessing the datasets.
-    # We need to tokenize inputs and targets.
-    column_names = dataset["train"].column_names
+    # can concurrency become a big issue?
+    print("Loading images ...")
+    dataset = manifest_to_hf_dataset(manifest_fp = args.manifest, artifact = artifact)
 
     # 6. Get the column names for input/target.
-    dataset_columns = DATASET_NAME_MAPPING.get(args.dataset_name, None)
-    if args.image_column is None:
-        image_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
-    else:
-        image_column = args.image_column
-        if image_column not in column_names:
-            raise ValueError(
-                f"--image_column' value '{args.image_column}' needs to be one of: {', '.join(column_names)}"
-            )
-    if args.caption_column is None:
-        caption_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
-    else:
-        caption_column = args.caption_column
-        if caption_column not in column_names:
-            raise ValueError(
-                f"--caption_column' value '{args.caption_column}' needs to be one of: {', '.join(column_names)}"
-            )
+    column_names = dataset["train"].column_names
+    image_column = args.image_column
+    caption_column = args.caption_column
+
+    if image_column not in column_names:
+        raise ValueError(
+            f"--image_column' value '{args.image_column}' needs to be one of: {', '.join(column_names)}"
+        )
+    if caption_column not in column_names:
+        raise ValueError(
+            f"--caption_column' value '{args.caption_column}' needs to be one of: {', '.join(column_names)}"
+        )
 
     # Preprocessing the datasets.
     # We need to tokenize input captions and transform the images.
     def tokenize_captions(examples, is_train=True):
         captions = []
-        for caption in examples[caption_column]:
+        for caption in examples["prompt"]:
             if isinstance(caption, str):
                 captions.append(caption)
             elif isinstance(caption, (list, np.ndarray)):
@@ -611,15 +592,14 @@ def main():
     )
 
     def preprocess_train(examples):
-        images = [image.convert("RGB") for image in examples[image_column]]
+        images = [image.convert("RGB") for image in examples["image"]]
         examples["pixel_values"] = [train_transforms(image) for image in images]
         examples["input_ids"] = tokenize_captions(examples)
         return examples
 
     with accelerator.main_process_first():
         if args.max_train_samples is not None:
-            dataset["train"] = dataset["train"].shuffle(seed=args.seed).select(range(args.max_train_samples))
-        # Set the training transforms
+            dataset["train"] = dataset["train"].shuffle(seed=args.seed).select(range())
         train_dataset = dataset["train"].with_transform(preprocess_train)
 
     def collate_fn(examples):
@@ -663,11 +643,6 @@ def main():
     # Afterwards we recalculate our number of training epochs
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
-    # We need to initialize the trackers we use, and also store our configuration.
-    # The trackers initializes automatically on the main process.
-    if accelerator.is_main_process:
-        accelerator.init_trackers("text2image-fine-tune", config=vars(args))
-
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
@@ -680,6 +655,15 @@ def main():
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
     global_step = 0
     first_epoch = 0
+
+    if accelerator.is_main_process:
+        # create a NimbleBox tracker
+        # https://stackoverflow.com/questions/16878315/what-is-the-right-way-to-treat-python-argparse-namespace-as-a-dictionary
+        args_dict = vars(args)
+        args_dict["number_of_samples"] = len(train_dataset)
+        args_dict["total_train_batch_size"] = total_batch_size
+        tracker = project.get_exp_tracker(metadata = args_dict)
+
 
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
@@ -787,10 +771,13 @@ def main():
                 optimizer.zero_grad()
 
             # Checks if the accelerator has performed an optimization step behind the scenes
-            if accelerator.sync_gradients:
+            logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "train_loss": train_loss, "step": global_step}
+            progress_bar.set_postfix(**logs)
+            if accelerator.sync_gradients:                
+                tracker.log(logs)
                 progress_bar.update(1)
                 global_step += 1
-                accelerator.log({"train_loss": train_loss}, step=global_step)
+                # accelerator.log({"train_loss": train_loss}, step=global_step)
                 train_loss = 0.0
 
                 if global_step % args.checkpointing_steps == 0:
@@ -799,73 +786,56 @@ def main():
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-            logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
-            progress_bar.set_postfix(**logs)
+                        # upload the checkpoint to Artifacts
+                        tracker.save_file(save_path)
 
             if global_step >= args.max_train_steps:
                 break
 
-        if accelerator.is_main_process:
-            if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
-                logger.info(
-                    f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
-                    f" {args.validation_prompt}."
+        if accelerator.is_main_process and args.validation_prompt is not None and global_step % args.validation_steps == 0:
+            logger.info(
+                f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
+                f" {args.validation_prompt}."
+            )
+            # create pipeline
+            pipeline = DiffusionPipeline.from_pretrained(
+                args.pretrained_model_name_or_path,
+                unet=accelerator.unwrap_model(unet),
+                revision=args.revision,
+                torch_dtype=weight_dtype,
+            )
+            pipeline = pipeline.to(accelerator.device)
+            pipeline.set_progress_bar_config(disable=True)
+
+            # run inference
+            generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
+            images = []
+            for _ in range(args.num_validation_images):
+                images.append(
+                    pipeline(args.validation_prompt, num_inference_steps=30, generator=generator).images[0]
                 )
-                # create pipeline
-                pipeline = DiffusionPipeline.from_pretrained(
-                    args.pretrained_model_name_or_path,
-                    unet=accelerator.unwrap_model(unet),
-                    revision=args.revision,
-                    torch_dtype=weight_dtype,
-                )
-                pipeline = pipeline.to(accelerator.device)
-                pipeline.set_progress_bar_config(disable=True)
 
-                # run inference
-                generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
-                images = []
-                for _ in range(args.num_validation_images):
-                    images.append(
-                        pipeline(args.validation_prompt, num_inference_steps=30, generator=generator).images[0]
-                    )
+            # store the images in the artifacts
+            fps = []
+            for i, image in enumerate(images):
+                fp = f"{global_step}_{i:02d}_{args.validation_prompt}.png"
+                image.save(fp)
+                fps.append(fp)
+            try:
+                tracker.save_file(*fps)
+            except Exception as e:
+                print("[ERROR] failed to put files to artifacts:", e)
 
-                for tracker in accelerator.trackers:
-                    if tracker.name == "tensorboard":
-                        np_images = np.stack([np.asarray(img) for img in images])
-                        tracker.writer.add_images("validation", np_images, epoch, dataformats="NHWC")
-                    if tracker.name == "wandb":
-                        tracker.log(
-                            {
-                                "validation": [
-                                    wandb.Image(image, caption=f"{i}: {args.validation_prompt}")
-                                    for i, image in enumerate(images)
-                                ]
-                            }
-                        )
-
-                del pipeline
-                torch.cuda.empty_cache()
+            del pipeline
+            torch.cuda.empty_cache()
 
     # Save the lora layers
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         unet = unet.to(torch.float32)
         unet.save_attn_procs(args.output_dir)
-
-        if args.push_to_hub:
-            save_model_card(
-                repo_id,
-                images=images,
-                base_model=args.pretrained_model_name_or_path,
-                dataset_name=args.dataset_name,
-                repo_folder=args.output_dir,
-            )
-            upload_folder(
-                repo_id=repo_id,
-                folder_path=args.output_dir,
-                commit_message="End of training",
-                ignore_patterns=["step_*", "epoch_*"],
-            )
+        tracker.save_file(args.output_dir)
+        
 
     # Final inference
     # Load previous pipeline
@@ -884,21 +854,19 @@ def main():
         images.append(pipeline(args.validation_prompt, num_inference_steps=30, generator=generator).images[0])
 
     if accelerator.is_main_process:
-        for tracker in accelerator.trackers:
-            if tracker.name == "tensorboard":
-                np_images = np.stack([np.asarray(img) for img in images])
-                tracker.writer.add_images("test", np_images, epoch, dataformats="NHWC")
-            if tracker.name == "wandb":
-                tracker.log(
-                    {
-                        "test": [
-                            wandb.Image(image, caption=f"{i}: {args.validation_prompt}")
-                            for i, image in enumerate(images)
-                        ]
-                    }
-                )
+        # store the images in the artifacts
+        fps = []
+        for i, image in enumerate(images):
+            fp = f"{global_step}_{i:02d}_{args.validation_prompt}.png"
+            image.save(fp)
+            fps.append(fp)
+        try:
+            tracker.save_file(*fps)
+        except Exception as e:
+            print("[ERROR] failed to put files to artifacts:", e)
 
     accelerator.end_training()
+    tracker.end()
 
 
 if __name__ == "__main__":

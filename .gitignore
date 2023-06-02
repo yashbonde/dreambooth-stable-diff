@@ -9,3 +9,4 @@ env
 data
 *.msg
 .DS_Store
+sd-model-finetuned-lora/

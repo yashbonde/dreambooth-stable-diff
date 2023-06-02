@@ -53,3 +53,21 @@ nbx serve upload op_server:prompt \
 ```
 
  
+
+### Finetuning scripts
+
+```
+python3 train_text_to_image_lora.py \
+  --manifest manifest.json \
+  --train_batch_size=1 \
+  --gradient_accumulation_steps=4 \
+  --resolution=512 \
+  --max_train_steps=4000 \
+  --learning_rate=1e-04 \
+  --max_grad_norm=1 \
+  --lr_scheduler="cosine" \
+  --lr_warmup_steps=0 \
+  --checkpointing_steps=500 \
+  --validation_steps 50 \
+  --validation_prompt 'Beautiful purple hand holding a red heart with planets, stars and black universe in the background, style: @wrinkledot'
+```

@@ -938,11 +938,13 @@ def main():
 
     file_counter = 0
     for j, (path, prompt) in enumerate(image_prompts_map.items()):
-        file = Image.open(path)
-        image = pad_image(file)
-        image = image.resize((resolution, resolution))
-        image = image.convert("RGB")
-        image.save(f"instance_images/{prompt}_({j+1}).jpg", format="JPEG", quality=100)
+        _fp = f"instance_images/{prompt}_({j+1}).jpg"
+        if not os.path.exists(_fp):
+            file = Image.open(path)
+            image = pad_image(file)
+            image = image.resize((resolution, resolution))
+            image = image.convert("RGB")
+            image.save(_fp, format="JPEG", quality=100)
         file_counter += 1
 
     # training variables
