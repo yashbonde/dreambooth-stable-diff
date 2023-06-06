@@ -23,16 +23,27 @@ STD_NBX - artifact put_to ./data ./
 
 Next to finetune the model we are going to use a GPU NimbleBox Job. To create the job and trigger it.
 
-```
-nbx jobs upload src:main \
-  --id '<job_id>' \
-  --resource_cpu="600m" \
-  --resource_memory="600Mi" \
-  --resource_disk_size="10Gi" \
-  --resource_gpu="nvidia-tesla-k80" \
-  --resource_gpu_count="1" \
-  --trigger \
-  --p "art in the style of @nimblebot"
+```diff
+- python3 train_text_to_image_lora.py \
++ nbx projects --id '<project_id>' - run train_text_to_image_lora:main \
++  --resource_cpu="1000m" \
++  --resource_memory="6000Mi" \
++  --resource_disk_size="20Gi" \
++  --resource_gpu="nvidia-tesla-t4" \
++  --resource_gpu_count="1" \
+  --manifest manifest.json \
+  --train_batch_size=3 \
+  --gradient_accumulation_steps=4 \
+  --resolution=512 \
+  --mixed_precision="fp16" \
+  --max_train_steps=10000 \
+  --learning_rate=1e-04 \
+  --max_grad_norm=1 \
+  --lr_scheduler="cosine" \
+  --lr_warmup_steps=0 \
+  --checkpointing_steps=1000 \
+  --validation_steps 500 \
+  --validation_prompt 'Beautiful purple hand holding a red heart with planets, stars and black universe in the background, style: @wrinkledot'
 ```
 
 It will create a Relic called "dreambooth" and put all the files there. (Coming) use `nbox.Lmao` to monitor the model in production with a live dashboard.
@@ -50,24 +61,4 @@ nbx serve upload op_server:prompt \
   --resource_gpu="nvidia-tesla-k80" \
   --resource_gpu_count="1" \
   --trigger
-```
-
- 
-
-### Finetuning scripts
-
-```
-python3 train_text_to_image_lora.py \
-  --manifest manifest.json \
-  --train_batch_size=1 \
-  --gradient_accumulation_steps=4 \
-  --resolution=512 \
-  --max_train_steps=4000 \
-  --learning_rate=1e-04 \
-  --max_grad_norm=1 \
-  --lr_scheduler="cosine" \
-  --lr_warmup_steps=0 \
-  --checkpointing_steps=500 \
-  --validation_steps 50 \
-  --validation_prompt 'Beautiful purple hand holding a red heart with planets, stars and black universe in the background, style: @wrinkledot'
 ```

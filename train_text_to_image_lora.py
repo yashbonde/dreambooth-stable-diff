@@ -19,6 +19,7 @@
 
 import os
 import math
+import fire
 import random
 import logging
 import argparse
@@ -50,7 +51,7 @@ from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
-from common import load_images, manifest_to_hf_dataset
+from common import load_images, manifest_to_hf_dataset, safe_save_files
 from nbox import Project
 
 
@@ -88,254 +89,155 @@ These are LoRA adaption weights for {base_model}. The weights were fine-tuned on
         f.write(yaml + model_card)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Simple example of a training script.")
-    parser.add_argument(
-        "--manifest",
-        type=str,
-        required=True,
-        help="Path to training manifest file",
-    )
-    parser.add_argument(
-        "--pretrained_model_name_or_path",
-        type=str,
-        default="runwayml/stable-diffusion-v1-5",
-        required=False,
-        help="Path to pretrained model or model identifier from huggingface.co/models.",
-    )
-    parser.add_argument(
-        "--revision",
-        type=str,
-        default=None,
-        required=False,
-        help="Revision of pretrained model identifier from huggingface.co/models.",
-    )
-    parser.add_argument(
-        "--dataset_config_name",
-        type=str,
-        default=None,
-        help="The config of the Dataset, leave as None if there's only one config.",
-    )
-    parser.add_argument(
-        "--image_column", type=str, default="image", help="The column of the dataset containing an image."
-    )
-    parser.add_argument(
-        "--caption_column",
-        type=str,
-        default="prompt",
-        help="The column of the dataset containing a caption or a list of captions.",
-    )
-    parser.add_argument(
-        "--validation_prompt", type=str, default=None, help="A prompt that is sampled during training for inference."
-    )
-    parser.add_argument(
-        "--num_validation_images",
-        type=int,
-        default=4,
-        help="Number of images that should be generated during validation with `validation_prompt`.",
-    )
-    parser.add_argument(
-        "--validation_steps",
-        type=int,
-        default=50,
-        help=(
-            "Run fine-tuning validation every X steps. The validation process consists of running the prompt"
-            " `args.validation_prompt` multiple times: `args.num_validation_images`."
-        ),
-    )
-    parser.add_argument(
-        "--max_train_samples",
-        type=int,
-        default=None,
-        help=(
-            "For debugging purposes or quicker training, truncate the number of training examples to this "
-            "value if set."
-        ),
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="sd-model-finetuned-lora",
-        help="The output directory where the model predictions and checkpoints will be written.",
-    )
-    parser.add_argument(
-        "--cache_dir",
-        type=str,
-        default=None,
-        help="The directory where the downloaded models and datasets will be stored.",
-    )
-    parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
-    parser.add_argument(
-        "--resolution",
-        type=int,
-        default=512,
-        help=(
-            "The resolution for input images, all the images in the train/validation dataset will be resized to this"
-            " resolution"
-        ),
-    )
-    parser.add_argument(
-        "--center_crop",
-        default=False,
-        action="store_true",
-        help=(
-            "Whether to center crop the input images to the resolution. If not set, the images will be randomly"
-            " cropped. The images will be resized to the resolution first before cropping."
-        ),
-    )
-    parser.add_argument(
-        "--random_flip",
-        action="store_true",
-        help="whether to randomly flip images horizontally",
-    )
-    parser.add_argument(
-        "--train_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader."
-    )
-    parser.add_argument("--num_train_epochs", type=int, default=100)
-    parser.add_argument(
-        "--max_train_steps",
-        type=int,
-        default=None,
-        help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
-    )
-    parser.add_argument(
-        "--gradient_accumulation_steps",
-        type=int,
-        default=1,
-        help="Number of updates steps to accumulate before performing a backward/update pass.",
-    )
-    parser.add_argument(
-        "--gradient_checkpointing",
-        action="store_true",
-        help="Whether or not to use gradient checkpointing to save memory at the expense of slower backward pass.",
-    )
-    parser.add_argument(
-        "--learning_rate",
-        type=float,
-        default=1e-4,
-        help="Initial learning rate (after the potential warmup period) to use.",
-    )
-    parser.add_argument(
-        "--scale_lr",
-        action="store_true",
-        default=False,
-        help="Scale the learning rate by the number of GPUs, gradient accumulation steps, and batch size.",
-    )
-    parser.add_argument(
-        "--lr_scheduler",
-        type=str,
-        default="constant",
-        help=(
-            'The scheduler type to use. Choose between ["linear", "cosine", "cosine_with_restarts", "polynomial",'
-            ' "constant", "constant_with_warmup"]'
-        ),
-    )
-    parser.add_argument(
-        "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
-    )
-    parser.add_argument(
-        "--snr_gamma",
-        type=float,
-        default=None,
-        help="SNR weighting gamma to be used if rebalancing the loss. Recommended value is 5.0. "
-        "More details here: https://arxiv.org/abs/2303.09556.",
-    )
-    parser.add_argument(
-        "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
-    )
-    parser.add_argument(
-        "--allow_tf32",
-        action="store_true",
-        help=(
-            "Whether or not to allow TF32 on Ampere GPUs. Can be used to speed up training. For more information, see"
-            " https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"
-        ),
-    )
-    parser.add_argument(
-        "--dataloader_num_workers",
-        type=int,
-        default=0,
-        help=(
-            "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
-        ),
-    )
-    parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
-    parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
-    parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
-    parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
-    parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
-    parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
-    parser.add_argument("--hub_token", type=str, default=None, help="The token to use to push to the Model Hub.")
-    parser.add_argument(
-        "--hub_model_id",
-        type=str,
-        default=None,
-        help="The name of the repository to keep in sync with the local `output_dir`.",
-    )
-    parser.add_argument(
-        "--logging_dir",
-        type=str,
-        default="logs",
-        help=(
-            "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"
-            " *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***."
-        ),
-    )
-    parser.add_argument(
-        "--mixed_precision",
-        type=str,
-        default=None,
-        choices=["no", "fp16", "bf16"],
-        help=(
-            "Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >="
-            " 1.10.and an Nvidia Ampere GPU.  Default to the value of accelerate config of the current system or the"
-            " flag passed with the `accelerate.launch` command. Use this argument to override the accelerate config."
-        ),
-    )
-    parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
-    parser.add_argument(
-        "--checkpointing_steps",
-        type=int,
-        default=500,
-        help=(
-            "Save a checkpoint of the training state every X updates. These checkpoints are only suitable for resuming"
-            " training using `--resume_from_checkpoint`."
-        ),
-    )
-    parser.add_argument(
-        "--checkpoints_total_limit",
-        type=int,
-        default=None,
-        help=(
-            "Max number of checkpoints to store. Passed as `total_limit` to the `Accelerator` `ProjectConfiguration`."
-            " See Accelerator::save_state https://huggingface.co/docs/accelerate/package_reference/accelerator#accelerate.Accelerator.save_state"
-            " for more docs"
-        ),
-    )
-    parser.add_argument(
-        "--resume_from_checkpoint",
-        type=str,
-        default=None,
-        help=(
-            "Whether training should be resumed from a previous checkpoint. Use a path saved by"
-            ' `--checkpointing_steps`, or `"latest"` to automatically select the last available checkpoint.'
-        ),
-    )
-    parser.add_argument(
-        "--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers."
-    )
-    parser.add_argument("--noise_offset", type=float, default=0, help="The scale of noise offset.")
+def main(
+    manifest: str,
+    pretrained_model_name_or_path: str = "runwayml/stable-diffusion-v1-5",
+    revision: str = None,
+    dataset_config_name: str = None,
+    image_column: str = "image",
+    caption_column: str = "prompt",
+    validation_prompt: str = None,
+    num_validation_images: int = 4,
+    validation_steps: int = 50,
+    max_train_samples: int = None,
+    output_dir: str = "sd-model-finetuned-lora",
+    cache_dir: str = None,
+    seed: int = None,
+    resolution: int = 512,
+    center_crop: bool = False,
+    random_flip: bool = False,
+    train_batch_size: int = 16,
+    num_train_epochs: int = 100,
+    max_train_steps: int = None,
+    gradient_accumulation_steps: int = 1,
+    gradient_checkpointing: bool = False,
+    learning_rate: float = 1e-4,
+    scale_lr: bool = False,
+    lr_scheduler: str = "constant",
+    lr_warmup_steps: int = 500,
+    snr_gamma: float = None,
+    use_8bit_adam: bool = False,
+    allow_tf32: bool = False,
+    dataloader_num_workers: int = 0,
+    adam_beta1: float = 0.9,
+    adam_beta2: float = 0.999,
+    adam_weight_decay: float = 1e-2,
+    adam_epsilon: float = 1e-08,
+    max_grad_norm: float = 1.0,
+    push_to_hub: bool = False,
+    hub_token: str = None,
+    hub_model_id: str = None,
+    logging_dir: str = "logs",
+    mixed_precision: str = None,
+    local_rank: int = -1,
+    checkpointing_steps: int = 500,
+    checkpoints_total_limit: int = None,
+    resume_from_checkpoint: str = None,
+    enable_xformers_memory_efficient_attention: bool = False,
+    noise_offset: float = 0,
+) -> None:
+    """
+    function for training Stable Diffusion using LoRA
 
-    args = parser.parse_args()
+    Args:
+        manifest (str): Path to training manifest file.
+        pretrained_model_name_or_path (str): Path to pretrained model or model identifier from huggingface.co/models.
+        revision (str): Revision of pretrained model identifier from huggingface.co/models.
+        dataset_config_name (str): The config of the Dataset, leave as None if there's only one config.
+        image_column (str): The column of the dataset containing an image.
+        caption_column (str): The column of the dataset containing a caption or a list of captions.
+        validation_prompt (str): A prompt that is sampled during training for inference.
+        num_validation_images (int): Number of images that should be generated during validation with `validation_prompt`.
+        validation_steps (int): Run fine-tuning validation every X steps.
+        max_train_samples (int): For debugging purposes or quicker training, truncate the number of training examples.
+        output_dir (str): The output directory where the model predictions and checkpoints will be written.
+        cache_dir (str): The directory where the downloaded models and datasets will be stored.
+        seed (int): A seed for reproducible training.
+        resolution (int): The resolution for input images.
+        center_crop (bool): Whether to center crop the input images to the resolution.
+        random_flip (bool): Whether to randomly flip images horizontally.
+        train_batch_size (int): Batch size (per device) for the training dataloader.
+        num_train_epochs (int): Number of training epochs.
+        max_train_steps (int): Total number of training steps to perform.
+        gradient_accumulation_steps (int): Number of updates steps to accumulate before performing a backward/update pass.
+        gradient_checkpointing (bool): Whether or not to use gradient checkpointing to save memory.
+        learning_rate (float): Initial learning rate to use.
+        scale_lr (bool): Scale the learning rate by the number of GPUs, gradient accumulation steps, and batch size.
+        lr_scheduler (str): The scheduler type to use.
+        lr_warmup_steps (int): Number of steps for the warmup in the lr scheduler.
+        snr_gamma (float): SNR weighting gamma to be used if rebalancing the loss.
+        use_8bit_adam (bool): Whether or not to use 8-bit Adam from bitsandbytes.
+        allow_tf32 (bool): Whether or not to allow TF32 on Ampere GPUs.
+        dataloader_num_workers (int): Number of subprocesses to use for data loading.
+        adam_beta1 (float): The beta1 parameter for the Adam optimizer.
+        adam_beta2 (float): The beta2 parameter for the Adam optimizer.
+        adam_weight_decay (float): Weight decay to use.
+        adam_epsilon (float): Epsilon value for the Adam optimizer.
+        max_grad_norm (float): Max gradient norm.
+        push_to_hub (bool): Whether or not to push the model to the Hub.
+        hub_token (str): The token to use to push to the Model Hub.
+        hub_model_id (str): The name of the repository to keep in sync with the local `output_dir`.
+        logging_dir (str): TensorBoard log directory.
+        mixed_precision (str): Whether to use mixed precision.
+        local_rank (int): For distributed training: local_rank.
+        checkpointing_steps (int): Save a checkpoint of the training state every X updates.
+        checkpoints_total_limit (int): Max number of checkpoints to store.
+        resume_from_checkpoint (str): Whether training should be resumed from a previous checkpoint.
+        enable_xformers_memory_efficient_attention (bool): Whether or not to use xformers.
+        noise_offset (float): The scale of noise offset.
+    """
+
+    args = argparse.Namespace(
+        manifest=manifest,
+        pretrained_model_name_or_path=pretrained_model_name_or_path,
+        revision=revision,
+        dataset_config_name=dataset_config_name,
+        image_column=image_column,
+        caption_column=caption_column,
+        validation_prompt=validation_prompt,
+        num_validation_images=num_validation_images,
+        validation_steps=validation_steps,
+        max_train_samples=max_train_samples,
+        output_dir=output_dir,
+        cache_dir=cache_dir,
+        seed=seed,
+        resolution=resolution,
+        center_crop=center_crop,
+        random_flip=random_flip,
+        train_batch_size=train_batch_size,
+        num_train_epochs=num_train_epochs,
+        max_train_steps=max_train_steps,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        gradient_checkpointing=gradient_checkpointing,
+        learning_rate=learning_rate,
+        scale_lr=scale_lr,
+        lr_scheduler=lr_scheduler,
+        lr_warmup_steps=lr_warmup_steps,
+        snr_gamma=snr_gamma,
+        use_8bit_adam=use_8bit_adam,
+        allow_tf32=allow_tf32,
+        dataloader_num_workers=dataloader_num_workers,
+        adam_beta1=adam_beta1,
+        adam_beta2=adam_beta2,
+        adam_weight_decay=adam_weight_decay,
+        adam_epsilon=adam_epsilon,
+        max_grad_norm=max_grad_norm,
+        push_to_hub=push_to_hub,
+        hub_token=hub_token,
+        hub_model_id=hub_model_id,
+        logging_dir=logging_dir,
+        mixed_precision=mixed_precision,
+        local_rank=local_rank,
+        checkpointing_steps=checkpointing_steps,
+        checkpoints_total_limit=checkpoints_total_limit,
+        resume_from_checkpoint=resume_from_checkpoint,
+        enable_xformers_memory_efficient_attention=enable_xformers_memory_efficient_attention,
+        noise_offset=noise_offset
+    )
+
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if env_local_rank != -1 and env_local_rank != args.local_rank:
         args.local_rank = env_local_rank
-
-    return args
-
-
-def main():
-    args = parse_args()
 
     project = Project("a394e541")
     artifact = project.get_artifact()
@@ -394,7 +296,7 @@ def main():
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
     )
-    # freeze parameters of models to save more memory
+    # freeze parameters of models to save more memoryq
     unet.requires_grad_(False)
     vae.requires_grad_(False)
 
@@ -787,7 +689,7 @@ def main():
                         logger.info(f"Saved state to {save_path}")
 
                         # upload the checkpoint to Artifacts
-                        tracker.save_file(save_path)
+                        safe_save_files(tracker, save_path)
 
             if global_step >= args.max_train_steps:
                 break
@@ -821,10 +723,7 @@ def main():
                 fp = f"{global_step}_{i:02d}_{args.validation_prompt}.png"
                 image.save(fp)
                 fps.append(fp)
-            try:
-                tracker.save_file(*fps)
-            except Exception as e:
-                print("[ERROR] failed to put files to artifacts:", e)
+            safe_save_files(tracker, *fps)
 
             del pipeline
             torch.cuda.empty_cache()
@@ -834,7 +733,7 @@ def main():
     if accelerator.is_main_process:
         unet = unet.to(torch.float32)
         unet.save_attn_procs(args.output_dir)
-        tracker.save_file(args.output_dir)
+        safe_save_files(tracker, args.output_dir)
         
 
     # Final inference
@@ -860,14 +759,10 @@ def main():
             fp = f"{global_step}_{i:02d}_{args.validation_prompt}.png"
             image.save(fp)
             fps.append(fp)
-        try:
-            tracker.save_file(*fps)
-        except Exception as e:
-            print("[ERROR] failed to put files to artifacts:", e)
+        safe_save_files(tracker, *fps)
 
     accelerator.end_training()
     tracker.end()
 
-
 if __name__ == "__main__":
-    main()
+    fire.Fire(main)
