@@ -23,14 +23,12 @@ STD_NBX - artifact put_to ./data ./
 
 Next to finetune the model we are going to use a GPU NimbleBox Job. To create the job and trigger it.
 
-```diff
-- python3 train_text_to_image_lora.py \
-+ nbx projects --id '<project_id>' - run train_text_to_image_lora:main \
-+  --resource_cpu="1000m" \
-+  --resource_memory="6000Mi" \
-+  --resource_disk_size="20Gi" \
-+  --resource_gpu="nvidia-tesla-t4" \
-+  --resource_gpu_count="1" \
+```
+nbx projects --id '<project_id>' - run train_text_to_image_lora:main \
+  --resource_cpu="1000m" \
+  --resource_memory="6000Mi" \
+  --resource_disk_size="20Gi" \
+  --resource_gpu="nvidia-tesla-t4" \
   --manifest manifest.json \
   --train_batch_size=3 \
   --gradient_accumulation_steps=4 \
@@ -44,6 +42,19 @@ Next to finetune the model we are going to use a GPU NimbleBox Job. To create th
   --checkpointing_steps=1000 \
   --validation_steps 500 \
   --validation_prompt 'Beautiful purple hand holding a red heart with planets, stars and black universe in the background, style: @wrinkledot'
+```
+
+The only difference between running your script on NimbleBox and local machines is that you have define resources **one time**
+```diff
+- python3 train_text_to_image_lora.py \
++ nbx projects --id '<project_id>' - run train_text_to_image_lora:main \
+
+# only once
++  --resource_cpu="1000m" \
++  --resource_memory="6000Mi" \
++  --resource_disk_size="20Gi" \
++  --resource_gpu="nvidia-tesla-t4" \
++  --resource_gpu_count="1" \
 ```
 
 It will create a Relic called "dreambooth" and put all the files there. (Coming) use `nbox.Lmao` to monitor the model in production with a live dashboard.
