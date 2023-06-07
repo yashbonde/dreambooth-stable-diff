@@ -24,7 +24,8 @@ STD_NBX - artifact put_to ./data ./
 Next to finetune the model we are going to use a GPU NimbleBox Job. To create the job and trigger it.
 
 ```
-nbx projects --id '<project_id>' - run train_text_to_image_lora:main \
+STD_NBX - artifact put_to manifest.json manifest.json
+ - run train_text_to_image_lora:main \
   --resource_cpu="1000m" \
   --resource_memory="6000Mi" \
   --resource_disk_size="20Gi" \
@@ -64,12 +65,9 @@ It will create a Relic called "dreambooth" and put all the files there. (Coming)
 In order to serve the model for a public end point we are going to use GPU NimbleBox Serving. To create the serving and trigger it.
 
 ```
-nbx serve upload op_server:prompt \
-  --id '<serve_id>' \
-  --resource_cpu="600m" \
-  --resource_memory="600Mi" \
-  --resource_disk_size="10Gi" \
-  --resource_gpu="nvidia-tesla-k80" \
-  --resource_gpu_count="1" \
-  --trigger
+STD_NBX - serve op_server:prompt \
+  --resource_cpu="1000m" \
+  --resource_memory="6000Mi" \
+  --resource_disk_size="20Gi" \
+  --resource_gpu="nvidia-tesla-t4" \
 ```

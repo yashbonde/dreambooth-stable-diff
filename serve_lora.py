@@ -1,6 +1,7 @@
 import os
 import io
 import torch
+import base64
 import uvicorn
 from PIL import Image
 from time import time
@@ -65,10 +66,19 @@ async def generate_image(prompt: ImageCreate):
         generator = generator, 
     ).images[0]
 
-    memory_stream = io.BytesIO()
-    image.save(memory_stream, format="PNG")
-    memory_stream.seek(0)
-    return StreamingResponse(memory_stream, media_type="image/png")
+    # Convert image to base64
+    image_buffer = io.BytesIO()
+    image.save(image_buffer, format="PNG")
+    image_buffer.seek(0)
+    base64_image = base64.b64encode(image_buffer.getvalue()).decode("utf-8")
+
+    # Create the response dictionary
+    response = {
+        "image": base64_image,
+        "type": "png",
+        "resolution": [image.width, image.height]
+    }
+    return response
 
 if __name__ == "__main__":
     uvicorn.run(app, host="localhost", port=8001)
