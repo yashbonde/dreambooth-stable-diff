@@ -28,251 +28,7 @@ from huggingface_hub import HfFolder, Repository, whoami, snapshot_download
 from transformers import CLIPTextModel, CLIPTokenizer
 
 from common import load_images
-from nbox import Project # nbox is out SDK / CLI / APIs / python package for NBX
-
-
-logger = get_logger(__name__)
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Simple example of a training script.")
-    parser.add_argument(
-        "--manifest",
-        type=str,
-        required=True,
-        help="Path to training manifest file",
-    )
-    parser.add_argument(
-        "--pretrained_model_name_or_path",
-        type=str,
-        default=None,
-        required=False,
-        help="Path to pretrained model or model identifier from huggingface.co/models.",
-    )
-    parser.add_argument(
-        "--tokenizer_name",
-        type=str,
-        default=None,
-        help="Pretrained tokenizer name or path if not the same as model_name",
-    )
-    parser.add_argument(
-        "--instance_data_dir",
-        type=str,
-        default=None,
-        required=False,
-        help="A folder containing the training data of instance images.",
-    )
-    parser.add_argument(
-        "--class_data_dir",
-        type=str,
-        default=None,
-        required=False,
-        help="A folder containing the training data of class images.",
-    )
-    parser.add_argument(
-        "--instance_prompt",
-        type=str,
-        default=None,
-        help="The prompt with identifier specifying the instance",
-    )
-    parser.add_argument(
-        "--class_prompt",
-        type=str,
-        default="",
-        help="The prompt to specify images in the same class as provided instance images.",
-    )
-    parser.add_argument(
-        "--with_prior_preservation",
-        default=False,
-        action="store_true",
-        help="Flag to add prior preservation loss.",
-    )
-    parser.add_argument("--prior_loss_weight", type=float, default=1.0, help="The weight of prior preservation loss.")
-    parser.add_argument(
-        "--num_class_images",
-        type=int,
-        default=100,
-        help=(
-            "Minimal class images for prior preservation loss. If not have enough images, additional images will be"
-            " sampled with class_prompt."
-        ),
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="",
-        help="The output directory where the model predictions and checkpoints will be written.",
-    )
-    parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
-    parser.add_argument(
-        "--resolution",
-        type=int,
-        default=512,
-        help=(
-            "The resolution for input images, all the images in the train/validation dataset will be resized to this"
-            " resolution"
-        ),
-    )
-    parser.add_argument(
-        "--center_crop", action="store_true", help="Whether to center crop images before resizing to resolution"
-    )
-    parser.add_argument("--train_text_encoder", action="store_true", help="Whether to train the text encoder")
-    parser.add_argument(
-        "--train_batch_size", type=int, default=4, help="Batch size (per device) for the training dataloader."
-    )
-    parser.add_argument("--sample_batch_size", type=int, default=4, help="Batch size (per device) for sampling images.")
-    parser.add_argument("--num_train_epochs", type=int, default=1)
-    parser.add_argument(
-        "--max_train_steps",
-        type=int,
-        default=None,
-        help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
-    )
-    parser.add_argument(
-        "--gradient_accumulation_steps",
-        type=int,
-        default=1,
-        help="Number of updates steps to accumulate before performing a backward/update pass.",
-    )
-    parser.add_argument(
-        "--gradient_checkpointing",
-        action="store_true",
-        help="Whether or not to use gradient checkpointing to save memory at the expense of slower backward pass.",
-    )
-    parser.add_argument(
-        "--learning_rate",
-        type=float,
-        default=5e-6,
-        help="Initial learning rate (after the potential warmup period) to use.",
-    )
-    parser.add_argument(
-        "--scale_lr",
-        action="store_true",
-        default=False,
-        help="Scale the learning rate by the number of GPUs, gradient accumulation steps, and batch size.",
-    )
-    parser.add_argument(
-        "--lr_scheduler",
-        type=str,
-        default="constant",
-        help=(
-            'The scheduler type to use. Choose between ["linear", "cosine", "cosine_with_restarts", "polynomial",'
-            ' "constant", "constant_with_warmup"]'
-        ),
-    )
-    parser.add_argument(
-        "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
-    )
-    parser.add_argument(
-        "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
-    )
-    parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
-    parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
-    parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
-    parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
-    parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
-    parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
-    parser.add_argument("--hub_token", type=str, default=None, help="The token to use to push to the Model Hub.")
-    parser.add_argument(
-        "--hub_model_id",
-        type=str,
-        default=None,
-        help="The name of the repository to keep in sync with the local `output_dir`.",
-    )
-    parser.add_argument(
-        "--logging_dir",
-        type=str,
-        default="logs",
-        help=(
-            "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"
-            " *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***."
-        ),
-    )
-    parser.add_argument(
-        "--mixed_precision",
-        type=str,
-        default="no",
-        choices=["no", "fp16", "bf16"],
-        help=(
-            "Whether to use mixed precision. Choose"
-            "between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >= 1.10."
-            "and an Nvidia Ampere GPU."
-        ),
-    )
-
-    parser.add_argument(
-        "--save_n_steps",
-        type=int,
-        default=1,
-        help=("Save the model every n global_steps"),
-    )
-
-    parser.add_argument(
-        "--save_starting_step",
-        type=int,
-        default=1,
-        help=("The step from which it starts saving intermediary checkpoints"),
-    )
-
-    parser.add_argument(
-        "--stop_text_encoder_training",
-        type=int,
-        default=1000000,
-        help=("The step at which the text_encoder is no longer trained"),
-    )
-
-    parser.add_argument(
-        "--image_captions_filename",
-        action="store_true",
-        help="Get captions from filename",
-    )
-
-    parser.add_argument(
-        "--dump_only_text_encoder",
-        action="store_true",
-        default=False,
-        help="Dump only text encoder",
-    )
-
-    parser.add_argument(
-        "--train_only_unet",
-        action="store_true",
-        default=False,
-        help="Train only the unet",
-    )
-
-    parser.add_argument(
-        "--cache_latents",
-        action="store_true",
-        default=False,
-        help="Train only the unet",
-    )
-
-    parser.add_argument(
-        "--Session_dir",
-        type=str,
-        default="",
-        help="Current session directory",
-    )
-
-    parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
-
-    args, unknown = parser.parse_known_args()
-    env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
-    if env_local_rank != -1 and env_local_rank != args.local_rank:
-        args.local_rank = env_local_rank
-
-    # if args.instance_data_dir is None:
-    #    raise ValueError("You must specify a train data directory.")
-
-    # if args.with_prior_preservation:
-    #    if args.class_data_dir is None:
-    #        raise ValueError("You must specify a data directory for class images.")
-    #    if args.class_prompt is None:
-    #        raise ValueError("You must specify prompt for class images.")
-
-    return args
-
+from nbox import Project, logger, lo # nbox is out SDK / CLI / APIs / python package for NBX
 
 class DreamBoothDataset(Dataset):
     """
@@ -394,47 +150,6 @@ class LatentsDataset(Dataset):
         return self.latents_cache[index], self.text_encoder_cache[index]
 
 
-def get_full_repo_name(model_id: str, organization: Optional[str] = None, token: Optional[str] = None):
-    if token is None:
-        token = HfFolder.get_token()
-    if organization is None:
-        username = whoami(token)["name"]
-        return f"{username}/{model_id}"
-    else:
-        return f"{organization}/{model_id}"
-
-
-def merge_two_dicts(starting_dict: dict, updater_dict: dict) -> dict:
-    """
-    Starts from base starting dict and then adds the remaining key values from updater replacing the values from
-    the first starting/base dict with the second updater dict.
-
-    For later: how does d = {**d1, **d2} replace collision?
-
-    :param starting_dict:
-    :param updater_dict:
-    :return:
-    """
-    new_dict: dict = starting_dict.copy()  # start with keys and values of starting_dict
-    new_dict.update(updater_dict)  # modifies starting_dict with keys and values of updater_dict
-    return new_dict
-
-
-def merge_args(args1: argparse.Namespace, args2: argparse.Namespace) -> argparse.Namespace:
-    """
-
-    ref: https://stackoverflow.com/questions/56136549/how-can-i-merge-two-argparse-namespaces-in-python-2-x
-    :param args1:
-    :param args2:
-    :return:
-    """
-    # - the merged args
-    # The vars() function returns the __dict__ attribute to values of the given object e.g {field:value}.
-    merged_key_values_for_namespace: dict = merge_two_dicts(vars(args1), vars(args2))
-    args = argparse.Namespace(**merged_key_values_for_namespace)
-    return args
-
-
 def run_training(args, manifest_path: str, project: Project = None):
     logging_dir = Path(args.output_dir, args.logging_dir)
     i = args.save_starting_step
@@ -493,21 +208,8 @@ def run_training(args, manifest_path: str, project: Project = None):
                 torch.cuda.empty_cache()
 
     # Handle the repository creation
-    if accelerator.is_main_process:
-        if args.push_to_hub:
-            if args.hub_model_id is None:
-                repo_name = get_full_repo_name(Path(args.output_dir).name, token=args.hub_token)
-            else:
-                repo_name = args.hub_model_id
-            repo = Repository(args.output_dir, clone_from=repo_name)
-
-            with open(os.path.join(args.output_dir, ".gitignore"), "w+") as gitignore:
-                if "step_*" not in gitignore:
-                    gitignore.write("step_*\n")
-                if "epoch_*" not in gitignore:
-                    gitignore.write("epoch_*\n")
-        elif args.output_dir is not None:
-            os.makedirs(args.output_dir, exist_ok=True)
+    if accelerator.is_main_process and args.output_dir is not None:
+        os.makedirs(args.output_dir, exist_ok=True)
 
     # Load the tokenizer
     if args.tokenizer_name:
@@ -898,25 +600,158 @@ def run_training(args, manifest_path: str, project: Project = None):
     tracker.end() # end the logging for the tracker
 
 
-def pad_image(image):
-    w, h = image.size
-    if w == h:
-        return image
-    elif w > h:
-        new_image = Image.new(image.mode, (w, w), (0, 0, 0))
-        new_image.paste(image, (0, (w - h) // 2))
-        return new_image
-    else:
-        new_image = Image.new(image.mode, (h, h), (0, 0, 0))
-        new_image.paste(image, ((h - w) // 2, 0))
-        return new_image
+def main(
+    manifest: str,
+    pretrained_model_name_or_path: str = None,
+    tokenizer_name: str = None,
+    instance_data_dir: str = "instance_images",
+    class_data_dir: str = None,
+    instance_prompt: str = "",
+    class_prompt: str = "",
+    with_prior_preservation: bool = False,
+    prior_loss_weight: float = 1.0,
+    num_class_images: int = 100,
+    output_dir: str = "output_model",
+    seed: int = 42,
+    resolution: int = 512,
+    center_crop: bool = False,
+    train_text_encoder: bool = False,
+    train_batch_size: int = 1,
+    sample_batch_size: int = 4,
+    num_train_epochs: int = 1,
+    max_train_steps: int = None,
+    gradient_accumulation_steps: int = 1,
+    gradient_checkpointing: bool = False,
+    learning_rate: float = 2e-6,
+    scale_lr: bool = False,
+    lr_scheduler: str = "polynomial",
+    lr_warmup_steps: int = 0,
+    use_8bit_adam: bool = True,
+    adam_beta1: float = 0.9,
+    adam_beta2: float = 0.999,
+    adam_weight_decay: float = 1e-2,
+    adam_epsilon: float = 1e-08,
+    max_grad_norm: float = 1.0,
+    push_to_hub: bool = False,
+    hub_token: str = None,
+    hub_model_id: str = None,
+    logging_dir: str = "logs",
+    mixed_precision: str = "fp16",
+    save_n_steps: int = 0,
+    save_starting_step: int = 1,
+    stop_text_encoder_training: int = 1000000,
+    image_captions_filename: bool = True,
+    dump_only_text_encoder: bool = False,
+    train_only_unet: bool = False,
+    cache_latents: bool = False,
+    Session_dir: str = "",
+    local_rank: int = -1,
+):
+    """
+    Training script for a simple example.
 
+    Args:
+        manifest (str): Path to the training manifest file.
+        pretrained_model_name_or_path (str): Path to pretrained model or model identifier from huggingface.co/models.
+        tokenizer_name (str): Pretrained tokenizer name or path if not the same as `model_name`.
+        instance_data_dir (str): A folder containing the training data of instance images.
+        class_data_dir (str): A folder containing the training data of class images.
+        instance_prompt (str): The prompt with an identifier specifying the instance.
+        class_prompt (str): The prompt to specify images in the same class as provided instance images.
+        with_prior_preservation (bool): Flag to add prior preservation loss.
+        prior_loss_weight (float): The weight of prior preservation loss.
+        num_class_images (int): Minimal class images for prior preservation loss. If there are not enough images,
+            additional images will be sampled with `class_prompt`.
+        output_dir (str): The output directory where the model predictions and checkpoints will be written.
+        seed (int): A seed for reproducible training.
+        resolution (int): The resolution for input images. All the images in the train/validation dataset will be resized
+            to this resolution.
+        center_crop (bool): Whether to center crop images before resizing to `resolution`.
+        train_text_encoder (bool): Whether to train the text encoder.
+        train_batch_size (int): Batch size (per device) for the training dataloader.
+        sample_batch_size (int): Batch size (per device) for sampling images.
+        num_train_epochs (int): Number of training epochs.
+        max_train_steps (int): Total number of training steps to perform. If provided, overrides `num_train_epochs`.
+        gradient_accumulation_steps (int): Number of update steps to accumulate before performing a backward/update pass.
+        gradient_checkpointing (bool): Whether or not to use gradient checkpointing to save memory at the expense of a
+            slower backward pass.
+        learning_rate (float): Initial learning rate (after the potential warmup period) to use.
+        scale_lr (bool): Scale the learning rate by the number of GPUs, gradient accumulation steps, and batch size.
+        lr_scheduler (str): The scheduler type to use. Choose between ["linear", "cosine", "cosine_with_restarts",
+            "polynomial", "constant", "constant_with_warmup"].
+        lr_warmup_steps (int): Number of steps for the warmup in the learning rate scheduler.
+        use_8bit_adam (bool): Whether or not to use 8-bit Adam from `bitsandbytes`.
+        adam_beta1 (float): The beta1 parameter for the Adam optimizer.
+        adam_beta2 (float): The beta2 parameter for the Adam optimizer.
+        adam_weight_decay (float): Weight decay to use.
+        adam_epsilon (float): Epsilon value for the Adam optimizer.
+        max_grad_norm (float): Max gradient norm.
+        push_to_hub (bool): Whether or not to push the model to the Hub.
+        hub_token (str): The token to use to push to the Model Hub.
+        hub_model_id (str): The name of the repository to keep in sync with the local `output_dir`.
+        logging_dir (str): TensorBoard log directory.
+        mixed_precision (str): Whether to use mixed precision. Choose between "no", "fp16", "bf16" (bfloat16).
+        save_n_steps (int): Save the model every `n` global steps.
+        save_starting_step (int): The step from which it starts saving intermediary checkpoints.
+        stop_text_encoder_training (int): The step at which the text_encoder is no longer trained.
+        image_captions_filename (bool): Get captions from filename.
+        dump_only_text_encoder (bool): Dump only the text encoder.
+        train_only_unet (bool): Train only the unet.
+        cache_latents (bool): Cache latents.
+        Session_dir (str): Current session directory.
+        local_rank (int): For distributed training: local_rank.
+    """
+    args = argparse.Namespace(
+        manifest=manifest,
+        pretrained_model_name_or_path=pretrained_model_name_or_path,
+        tokenizer_name=tokenizer_name,
+        instance_data_dir=instance_data_dir,
+        class_data_dir=class_data_dir,
+        instance_prompt=instance_prompt,
+        class_prompt=class_prompt,
+        with_prior_preservation=with_prior_preservation,
+        prior_loss_weight=prior_loss_weight,
+        num_class_images=num_class_images,
+        output_dir=output_dir,
+        seed=seed,
+        resolution=resolution,
+        center_crop=center_crop,
+        train_text_encoder=train_text_encoder,
+        train_batch_size=train_batch_size,
+        sample_batch_size=sample_batch_size,
+        num_train_epochs=num_train_epochs,
+        max_train_steps=max_train_steps,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        gradient_checkpointing=gradient_checkpointing,
+        learning_rate=learning_rate,
+        scale_lr=scale_lr,
+        lr_scheduler=lr_scheduler,
+        lr_warmup_steps=lr_warmup_steps,
+        use_8bit_adam=use_8bit_adam,
+        adam_beta1=adam_beta1,
+        adam_beta2=adam_beta2,
+        adam_weight_decay=adam_weight_decay,
+        adam_epsilon=adam_epsilon,
+        max_grad_norm=max_grad_norm,
+        push_to_hub=push_to_hub,
+        hub_token=hub_token,
+        hub_model_id=hub_model_id,
+        logging_dir=logging_dir,
+        mixed_precision=mixed_precision,
+        save_n_steps=save_n_steps,
+        save_starting_step=save_starting_step,
+        stop_text_encoder_training=stop_text_encoder_training,
+        image_captions_filename=image_captions_filename,
+        dump_only_text_encoder=dump_only_text_encoder,
+        train_only_unet=train_only_unet,
+        cache_latents=cache_latents,
+        Session_dir=Session_dir,
+        local_rank=local_rank,
+    )
 
-def main():
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
-    if env_local_rank != -1 and env_local_rank != local_rank:
-        local_rank = env_local_rank
-    args_default = parse_args()
+    if env_local_rank != -1 and env_local_rank != args.local_rank:
+        args.local_rank = env_local_rank
 
     # define things that are user everywhere
     which_model = "v1-5"
@@ -927,7 +762,7 @@ def main():
 
     project = Project("a394e541")
     artifact = project.get_artifact()
-    manifest_fp = args_default.manifest
+    manifest_fp = args.manifest
     if not os.path.exists(manifest_fp):
         print("Did not find manifest, downloading manifest")
         artifact.get_from(manifest_fp, manifest_fp)
@@ -941,7 +776,6 @@ def main():
         _fp = f"instance_images/{prompt}_({j+1}).jpg"
         if not os.path.exists(_fp):
             file = Image.open(path)
-            image = pad_image(file)
             image = image.resize((resolution, resolution))
             image = image.convert("RGB")
             image.save(_fp, format="JPEG", quality=100)
@@ -958,34 +792,11 @@ def main():
     gradient_checkpointing = True if (which_model != "v1-5") else False
     cache_latents = True if which_model != "v1-5" else False
 
-    # load the default arguments
-    args_imported = argparse.Namespace(
-        image_captions_filename=True,
-        train_text_encoder=True if stptxt > 0 else False,
-        stop_text_encoder_training=stptxt,
-        save_n_steps=0,
-        pretrained_model_name_or_path=model_to_load,
-        instance_data_dir="instance_images",
-        class_data_dir=None,
-        output_dir="output_model",
-        instance_prompt="",
-        seed=42,
-        resolution=resolution,
-        mixed_precision="fp16",
-        train_batch_size=1,
-        gradient_accumulation_steps=1,
-        use_8bit_adam=True,
-        learning_rate=2e-6,
-        lr_scheduler="polynomial",
-        lr_warmup_steps=0,
-        max_train_steps=training_Steps,
-        gradient_checkpointing=gradient_checkpointing,
-        cache_latents=cache_latents,
-    )
-    print("Starting single training...")
-
-    args = merge_args(args_default, args_imported)
-    print(pformat(vars(args)))
+    # update the arguments
+    args.train_text_encoder = True if stptxt > 0 else False,
+    args.stop_text_encoder_training = stptxt,
+    args.pretrained_model_name_or_path = model_to_load,
+    args.max_train_steps = training_Steps,
 
     # run the training loop and create checkpoint files
     run_training(args = args, manifest_path = manifest_fp, project = project)
