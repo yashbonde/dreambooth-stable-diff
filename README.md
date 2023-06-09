@@ -24,8 +24,7 @@ STD_NBX - artifact put_to ./data ./
 Next to finetune the model we are going to use a GPU NimbleBox Job. To create the job and trigger it.
 
 ```
-STD_NBX - artifact put_to manifest.json manifest.json
- - run train_text_to_image_lora:main \
+STD_NBX - run train_text_to_image_lora:main \
   --resource_cpu="1000m" \
   --resource_memory="6000Mi" \
   --resource_disk_size="20Gi" \
@@ -70,4 +69,5 @@ STD_NBX - serve op_server:prompt \
   --resource_memory="6000Mi" \
   --resource_disk_size="20Gi" \
   --resource_gpu="nvidia-tesla-t4" \
+  --server_type="fastapi"
 ```

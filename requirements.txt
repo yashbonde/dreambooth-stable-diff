@@ -1,21 +1,21 @@
-nbox[serving]==0.13.0rc6
+nbox[serving]==0.13.0rc11
+Pillow
 --extra-index-url https://download.pytorch.org/whl/cu113
 torch==1.12.1+cu113
-Pillow
 torchvision==0.13.1+cu113
-git+https://github.com/huggingface/diffusers.git
-# accelerate==0.12.0
-accelerate>=0.16.0
-OmegaConf
-wget
-pytorch_lightning
-huggingface_hub
-ftfy
-transformers
-pyfiglet
+git+https://github.com/huggingface/diffusers.git@7d0ac4eeabfe78f5c38ad6582bb1062a43195a74
+accelerate==0.16.0
+omegaconf==2.3.0
+wget==3.2
+pytorch_lightning==2.0.2
+huggingface_hub==0.14.1
+ftfy==6.1.1
+transformers==4.29.2
+pyfiglet==0.8.post1
+bitsandbytes==0.39.0
+python-slugify==8.0.1
+requests==2.28.2
+tensorboard==2.11.2
+datasets==2.12.0
 # triton==2.0.0.dev20220701
-bitsandbytes
-python-slugify
-requests
-tensorboard
 # https://github.com/apolinario/xformers/releases/download/0.0.2/xformers-0.0.14.dev0-cp38-cp38-linux_x86_64.whl
